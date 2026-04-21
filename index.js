@@ -28,12 +28,19 @@ async function getUser(chatId, username) {
       level: 1,
       lastFarm: 0,
       lastCase: 0,
+      lastWork: 0,
       tasks: {
         sub: false
       }
     };
 
     await users.insertOne(u);
+  }
+
+  // FIX OLD USERS
+  if (!u.tasks) {
+    u.tasks = { sub: false };
+    await users.updateOne({ chatId }, { $set: { tasks: u.tasks } });
   }
 
   return u;
@@ -89,65 +96,6 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= TASKS TAB
-  if (q.data === "tab_tasks") {
-    return bot.editMessageText(
-`📜 TASKS
-
-1️⃣ Subscribe to channel:
-👉 https://t.me/PVEmpire1
-
-Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔍 CHECK", callback_data: "check_sub" }],
-            [{ text: "⬅ BACK", callback_data: "home" }]
-          ]
-        }
-      }
-    );
-  }
-
-  // ================= CHECK SUBSCRIPTION
-  if (q.data === "check_sub") {
-    try {
-      const res = await bot.getChatMember(`@${CHANNEL}`, chatId);
-
-      const isMember =
-        res.status === "member" ||
-        res.status === "administrator" ||
-        res.status === "creator";
-
-      if (isMember) {
-        u.tasks.sub = true;
-        u.coins += 25;
-        u.xp += 10;
-        u.level = level(u.xp);
-
-        await users.updateOne({ chatId }, { $set: u });
-
-        return bot.editMessageText("✅ TASK COMPLETED +25 COINS", {
-          chat_id: chatId,
-          message_id: messageId,
-          ...menu()
-        });
-      } else {
-        return bot.answerCallbackQuery(q.id, {
-          text: "❌ You are not subscribed",
-          show_alert: true
-        });
-      }
-    } catch (e) {
-      return bot.answerCallbackQuery(q.id, {
-        text: "⚠️ Can't verify channel",
-        show_alert: true
-      });
-    }
-  }
-
   // ================= FARM TAB
   if (q.data === "tab_farm") {
     return bot.editMessageText("⛏ FARM", {
@@ -162,7 +110,7 @@ Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
     });
   }
 
-  // ================= FARM
+  // ================= FARM (6h)
   if (q.data === "farm") {
     const cd = 6 * 60 * 60 * 1000;
 
@@ -206,13 +154,28 @@ Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
     });
   }
 
-  // ================= WORK
+  // ================= WORK (5-50 coins)
   if (q.data === "work") {
-    const reward = Math.random() < 0.7 ? 10 : 25;
+    const cd = 3 * 60 * 60 * 1000;
+
+    if (u.lastWork && now - u.lastWork < cd) {
+      const h = Math.ceil((cd - (now - u.lastWork)) / 3600000);
+
+      return bot.editMessageText(`💼 cooldown ${h}h`, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...menu()
+      });
+    }
+
+    const reward =
+      Math.random() < 0.7 ? 10 :
+      Math.random() < 0.95 ? 25 : 50;
 
     u.coins += reward;
     u.xp += 8;
     u.level = level(u.xp);
+    u.lastWork = now;
 
     await users.updateOne({ chatId }, { $set: u });
 
@@ -237,7 +200,7 @@ Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
     });
   }
 
-  // ================= CASE
+  // ================= CASE (24h)
   if (q.data === "case") {
     const cd = 24 * 60 * 60 * 1000;
 
@@ -265,6 +228,68 @@ Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
     });
   }
 
+  // ================= TASKS TAB (FIXED)
+  if (q.data === "tab_tasks") {
+    const status = u.tasks?.sub ? "✅ DONE" : "❌ NOT DONE";
+
+    return bot.editMessageText(
+`📜 TASKS
+
+1️⃣ Subscribe:
+👉 https://t.me/PVEmpire1
+
+Status: ${status}`,
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔍 CHECK", callback_data: "check_sub" }],
+            [{ text: "⬅ BACK", callback_data: "home" }]
+          ]
+        }
+      }
+    );
+  }
+
+  // ================= CHECK SUB (FIXED SAFE)
+  if (q.data === "check_sub") {
+    try {
+      const res = await bot.getChatMember("@PVEmpire1", chatId);
+
+      const isMember =
+        res.status === "member" ||
+        res.status === "administrator" ||
+        res.status === "creator";
+
+      if (!isMember) {
+        return bot.answerCallbackQuery(q.id, {
+          text: "❌ You are not subscribed",
+          show_alert: true
+        });
+      }
+
+      u.tasks.sub = true;
+      u.coins += 25;
+      u.xp += 10;
+      u.level = level(u.xp);
+
+      await users.updateOne({ chatId }, { $set: u });
+
+      return bot.editMessageText("✅ TASK COMPLETED +25 COINS", {
+        chat_id: chatId,
+        message_id: messageId,
+        ...menu()
+      });
+
+    } catch (e) {
+      return bot.answerCallbackQuery(q.id, {
+        text: "⚠️ Cannot verify channel",
+        show_alert: true
+      });
+    }
+  }
+
   // ================= PROFILE
   if (q.data === "tab_profile") {
     return bot.editMessageText(
@@ -286,4 +311,4 @@ Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
   }
 });
 
-console.log("🚀 GAME WITH TASKS READY");
+console.log("🚀 FULL GAME WITH TASKS RUNNING");
