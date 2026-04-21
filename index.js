@@ -13,7 +13,6 @@ const db = client.db("game");
 const users = db.collection("users");
 
 // ===== SYSTEMS =====
-const pendingBattles = new Map();
 const battles = new Map();
 
 // ===== LEVEL =====
@@ -31,8 +30,8 @@ async function getUser(chatId, username) {
       gems: 0,
       xp: 0,
       level: 1,
-      vip: false,
       wins: 0,
+      vip: false,
       lastFarm: 0,
       lastCase: 0
     };
@@ -43,8 +42,8 @@ async function getUser(chatId, username) {
   return u;
 }
 
-// ===== MAIN MENU =====
-function mainMenu() {
+// ===== MENU =====
+function menu() {
   return {
     reply_markup: {
       inline_keyboard: [
@@ -65,7 +64,7 @@ function mainMenu() {
 // ===== START =====
 bot.onText(/\/start/, async (msg) => {
   await getUser(msg.chat.id, msg.from.username);
-  bot.sendMessage(msg.chat.id, "🎮 GAME STARTED", mainMenu());
+  bot.sendMessage(msg.chat.id, "🎮 GAME READY", menu());
 });
 
 // ===== CALLBACK =====
@@ -76,12 +75,15 @@ bot.on("callback_query", async (q) => {
   const u = await getUser(chatId, q.from.username);
   const now = Date.now();
 
+  // ⚡ ALWAYS FAST ACK (fix lag)
+  bot.answerCallbackQuery(q.id).catch(() => {});
+
   // ================= HOME
   if (q.data === "home") {
-    return bot.editMessageText("🏠 MAIN MENU", {
+    return bot.editMessageText("🏠 MENU", {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
@@ -99,21 +101,21 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= FARM (6h)
+  // ================= FARM
   if (q.data === "farm") {
     const cd = 6 * 60 * 60 * 1000;
 
     if (u.lastFarm && now - u.lastFarm < cd) {
       const h = Math.ceil((cd - (now - u.lastFarm)) / 3600000);
-      return bot.editMessageText(`⛏ cooldown: ${h}h`, {
+
+      return bot.editMessageText(`⛏ cooldown ${h}h`, {
         chat_id: chatId,
         message_id: messageId,
-        ...mainMenu()
+        ...menu()
       });
     }
 
-    let gain = Math.floor(Math.random() * 10) + 5;
-    if (u.vip) gain *= 2;
+    const gain = Math.floor(Math.random() * 10) + 5;
 
     u.coins += gain;
     u.xp += 5;
@@ -125,7 +127,7 @@ bot.on("callback_query", async (q) => {
     return bot.editMessageText(`⛏ +${gain}`, {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
@@ -143,33 +145,23 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= CASE (24h)
+  // ================= CASE
   if (q.data === "case") {
     const cd = 24 * 60 * 60 * 1000;
 
     if (u.lastCase && now - u.lastCase < cd) {
       const h = Math.ceil((cd - (now - u.lastCase)) / 3600000);
-      return bot.editMessageText(`📦 cooldown: ${h}h`, {
+
+      return bot.editMessageText(`📦 cooldown ${h}h`, {
         chat_id: chatId,
         message_id: messageId,
-        ...mainMenu()
+        ...menu()
       });
     }
 
-    if (u.coins < 20) {
-      return bot.editMessageText("❌ not enough coins", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...mainMenu()
-      });
-    }
-
-    u.coins -= 20;
-
-    const reward = Math.random() < 0.6 ? 10 : Math.random() < 0.9 ? 30 : 100;
+    const reward = Math.random() < 0.6 ? 10 : 30;
 
     u.coins += reward;
-    u.xp += 15;
     u.lastCase = now;
 
     await users.updateOne({ chatId }, { $set: u });
@@ -177,7 +169,7 @@ bot.on("callback_query", async (q) => {
     return bot.editMessageText(`📦 +${reward}`, {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
@@ -185,9 +177,7 @@ bot.on("callback_query", async (q) => {
   if (q.data === "tab_profile") {
     return bot.editMessageText(
 `👤 PROFILE
-
 💰 ${u.coins}
-💎 ${u.gems}
 ⭐ XP ${u.xp}
 📊 LVL ${u.level}
 🏆 WINS ${u.wins}`,
@@ -207,18 +197,11 @@ bot.on("callback_query", async (q) => {
   if (q.data === "tab_battle") {
     const all = await users.find().toArray();
 
-    let list = [];
-
-    all.forEach(op => {
-      if (op.chatId !== chatId) {
-        list.push([
-          {
-            text: `⚔ ${op.username}`,
-            callback_data: `pvp_${op.chatId}`
-          }
-        ]);
-      }
-    });
+    const list = all
+      .filter(x => x.chatId !== chatId)
+      .map(op => [
+        { text: `⚔ ${op.username}`, callback_data: `pvp_${op.chatId}` }
+      ]);
 
     return bot.editMessageText("⚔ SELECT PLAYER", {
       chat_id: chatId,
@@ -235,7 +218,6 @@ bot.on("callback_query", async (q) => {
   // ================= PVP REQUEST
   if (q.data.startsWith("pvp_")) {
     const enemyId = Number(q.data.split("_")[1]);
-
     const battleId = `${chatId}_${enemyId}`;
 
     battles.set(battleId, {
@@ -247,7 +229,7 @@ bot.on("callback_query", async (q) => {
       answered: new Set()
     });
 
-    await bot.sendMessage(enemyId, `⚔ Battle request from ${u.username}`, {
+    await bot.sendMessage(enemyId, `⚔ Battle request`, {
       reply_markup: {
         inline_keyboard: [
           [
@@ -258,10 +240,10 @@ bot.on("callback_query", async (q) => {
       }
     });
 
-    return bot.editMessageText("📩 SENT", {
+    return bot.editMessageText("📩 sent", {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
@@ -280,16 +262,19 @@ bot.on("callback_query", async (q) => {
     battles.delete(battleId);
   }
 
-  // ================= ACTIONS
+  // ================= ACTIONS (FAST FIXED)
   if (q.data.startsWith("atk_") || q.data.startsWith("def_")) {
     const [type, battleId] = q.data.split("_");
     const b = battles.get(battleId);
 
+    if (!b) return;
+
     const isP1 = chatId === b.p1;
 
-    let dmg = type === "atk"
-      ? Math.floor(Math.random() * 10) + 5
-      : Math.floor(Math.random() * 4);
+    const dmg =
+      type === "atk"
+        ? Math.floor(Math.random() * 10) + 5
+        : Math.floor(Math.random() * 4);
 
     if (isP1) b.p1Score += dmg;
     else b.p2Score += dmg;
@@ -305,30 +290,28 @@ bot.on("callback_query", async (q) => {
       const p1 = await users.findOne({ chatId: b.p1 });
       const p2 = await users.findOne({ chatId: b.p2 });
 
-      let res = `⚔ FINISH\n\n${p1.username}: ${b.p1Score}\n${p2.username}: ${b.p2Score}\n\n`;
+      let res = `⚔ RESULT\n${p1.username}: ${b.p1Score}\n${p2.username}: ${b.p2Score}`;
 
       if (b.p1Score > b.p2Score) {
-        res += `🏆 ${p1.username} WIN`;
+        res += `\n🏆 ${p1.username}`;
         await users.updateOne({ chatId: b.p1 }, { $inc: { coins: 30, wins: 1 } });
       } else {
-        res += `🏆 ${p2.username} WIN`;
+        res += `\n🏆 ${p2.username}`;
         await users.updateOne({ chatId: b.p2 }, { $inc: { coins: 30, wins: 1 } });
       }
 
       battles.delete(battleId);
 
-      await bot.sendMessage(b.p1, res, mainMenu());
-      await bot.sendMessage(b.p2, res, mainMenu());
+      await bot.sendMessage(b.p1, res, menu());
+      await bot.sendMessage(b.p2, res, menu());
       return;
     }
 
     startRound(battleId);
   }
-
-  bot.answerCallbackQuery(q.id);
 });
 
-// ===== ROUND FUNCTION =====
+// ===== ROUND =====
 async function startRound(battleId) {
   const b = battles.get(battleId);
 
@@ -349,4 +332,4 @@ async function startRound(battleId) {
   await bot.sendMessage(b.p2, msg, kb);
 }
 
-console.log("🚀 GAME READY");
+console.log("🚀 FAST GAME RUNNING");
