@@ -13,13 +13,22 @@ const db = client.db("game");
 const users = db.collection("users");
 
 // ===== MENU =====
-function mainMenu() {
+function menu() {
   return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "⛏ Farm", callback_data: "farm" }, { text: "💼 Work", callback_data: "work" }],
-        [{ text: "⚔ Battle", callback_data: "battle" }, { text: "📦 Case", callback_data: "case" }],
-        [{ text: "💰 Balance", callback_data: "balance" }, { text: "🏆 Top", callback_data: "top" }]
+        [
+          { text: "⛏ Farm", callback_data: "farm" },
+          { text: "💼 Work", callback_data: "work" }
+        ],
+        [
+          { text: "⚔ Battle", callback_data: "battle" },
+          { text: "📦 Case", callback_data: "case" }
+        ],
+        [
+          { text: "🛒 Shop", callback_data: "shop" },
+          { text: "💰 Balance", callback_data: "balance" }
+        ]
       ]
     }
   };
@@ -34,9 +43,11 @@ async function getUser(chatId, username) {
       chatId,
       username: username || "player",
       coins: 0,
+      gems: 0,
       xp: 0,
       level: 1,
-      wins: 0
+      inventory: [],
+      vip: false
     };
     await users.insertOne(u);
   }
@@ -50,105 +61,117 @@ const level = (xp) => Math.floor(xp / 100) + 1;
 bot.onText(/\/start/, async (msg) => {
   await getUser(msg.chat.id, msg.from.username);
 
-  bot.sendMessage(
-    msg.chat.id,
-    "🎮 Welcome!\nОберіть дію:",
-    mainMenu()
-  );
+  bot.sendMessage(msg.chat.id, "🎮 GAME STARTED", menu());
 });
 
-// ===== BUTTONS =====
+// ===== CALLBACK =====
 bot.on("callback_query", async (q) => {
   const chatId = q.message.chat.id;
-  const user = await getUser(chatId, q.from.username);
+  let u = await getUser(chatId, q.from.username);
 
   let text = "";
 
-  switch (q.data) {
+  // ===== FARM =====
+  if (q.data === "farm") {
+    let gain = Math.floor(Math.random() * 10) + 1;
 
-    case "farm": {
-      const gain = Math.floor(Math.random() * 10) + 1;
-      user.coins += gain;
-      user.xp += 5;
-      user.level = level(user.xp);
-      text = `⛏ +${gain} монет`;
-      break;
-    }
+    if (u.vip) gain *= 2;
 
-    case "work": {
-      const r = Math.random();
-      let reward = r < 0.7 ? 5 : r < 0.95 ? 20 : 100;
+    u.coins += gain;
+    u.xp += 5;
+    u.level = level(u.xp);
 
-      user.coins += reward;
-      user.xp += 10;
-      user.level = level(user.xp);
+    text = `⛏ +${gain} coins`;
+  }
 
-      text = `💼 +${reward} монет`;
-      break;
-    }
+  // ===== WORK =====
+  if (q.data === "work") {
+    let reward = Math.random() < 0.7 ? 5 : Math.random() < 0.95 ? 20 : 100;
 
-    case "balance":
-      text = `💰 ${user.coins}\n⭐ XP: ${user.xp}\n📊 LVL: ${user.level}`;
-      break;
+    if (u.vip) reward *= 2;
 
-    case "case": {
-      const cost = 20;
-      if (user.coins < cost) {
-        text = "❌ нема монет";
-        break;
-      }
+    u.coins += reward;
+    u.xp += 10;
+    u.level = level(u.xp);
 
-      user.coins -= cost;
+    text = `💼 +${reward}`;
+  }
+
+  // ===== BALANCE =====
+  if (q.data === "balance") {
+    text = `💰 ${u.coins}
+💎 ${u.gems}
+⭐ XP ${u.xp}
+📊 LVL ${u.level}
+👑 VIP: ${u.vip ? "YES" : "NO"}`;
+  }
+
+  // ===== CASE =====
+  if (q.data === "case") {
+    const cost = 20;
+    if (u.coins < cost) {
+      text = "❌ no coins";
+    } else {
+      u.coins -= cost;
 
       const roll = Math.random();
-      const reward = roll < 0.6 ? 10 : roll < 0.9 ? 30 : 100;
+      let reward = roll < 0.6 ? 10 : roll < 0.9 ? 30 : 100;
 
-      user.coins += reward;
-      user.xp += 15;
+      u.coins += reward;
+      u.xp += 15;
 
-      text = `📦 кейс: +${reward}`;
-      break;
-    }
-
-    case "battle": {
-      const all = await users.find().toArray();
-      const enemy = all[Math.floor(Math.random() * all.length)];
-
-      if (!enemy || enemy.chatId === user.chatId) {
-        text = "нема противника";
-        break;
-      }
-
-      const win = Math.random() * user.level > Math.random() * enemy.level;
-
-      if (win) {
-        user.coins += 20;
-        user.wins += 1;
-        text = `⚔ перемога над ${enemy.username}`;
-      } else {
-        text = `💀 програв ${enemy.username}`;
-      }
-
-      break;
-    }
-
-    case "top": {
-      const top = await users.find().sort({ coins: -1 }).limit(5).toArray();
-
-      text = "🏆 TOP:\n\n";
-      top.forEach((u, i) => {
-        text += `${i + 1}. ${u.username} — ${u.coins}\n`;
-      });
-
-      break;
+      text = `📦 case +${reward}`;
     }
   }
 
-  await users.updateOne({ chatId }, { $set: user });
+  // ===== BATTLE =====
+  if (q.data === "battle") {
+    const all = await users.find().toArray();
+    const enemy = all[Math.floor(Math.random() * all.length)];
+
+    if (!enemy || enemy.chatId === u.chatId) {
+      text = "no enemy";
+    } else {
+      const win =
+        Math.random() * u.level > Math.random() * enemy.level;
+
+      if (win) {
+        u.coins += 30;
+        text = `⚔ WIN vs ${enemy.username}`;
+      } else {
+        text = `💀 LOSE vs ${enemy.username}`;
+      }
+    }
+  }
+
+  // ===== SHOP =====
+  if (q.data === "shop") {
+    text = `🛒 SHOP:
+
+1️⃣ VIP (100 coins)
+→ x2 farm + work
+
+2️⃣ 50 gems (200 coins)
+
+3️⃣ Sword (+10 power)
+
+Use:
+buy_vip / buy_gems / buy_sword`;
+  }
+
+  // ===== BUY VIP =====
+  if (q.data === "buy_vip") {
+    if (u.coins >= 100) {
+      u.coins -= 100;
+      u.vip = true;
+      text = "👑 VIP activated!";
+    } else text = "❌ no coins";
+  }
+
+  await users.updateOne({ chatId }, { $set: u });
 
   bot.answerCallbackQuery(q.id);
-
-  bot.sendMessage(chatId, text, mainMenu());
+  bot.sendMessage(chatId, text, menu());
 });
 
-console.log("🚀 Bot with menu started");
+console.log("🚀 LEVEL 2 GAME BOT RUNNING");
