@@ -4,10 +4,8 @@ import { MongoClient } from "mongodb";
 
 dotenv.config();
 
-// ===== BOT =====
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
-// ===== DB =====
 const client = new MongoClient(process.env.MONGO_URL);
 await client.connect();
 
@@ -17,7 +15,7 @@ const users = db.collection("users");
 // ===== LEVEL =====
 const level = (xp) => Math.floor(xp / 100) + 1;
 
-// ===== USER =====
+// ===== GET USER =====
 async function getUser(chatId, username) {
   let u = await users.findOne({ chatId });
 
@@ -30,7 +28,9 @@ async function getUser(chatId, username) {
       xp: 0,
       level: 1,
       vip: false,
-      wins: 0
+      wins: 0,
+      lastFarm: 0,
+      lastCase: 0
     };
 
     await users.insertOne(u);
@@ -45,15 +45,18 @@ function menu() {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "⛏ Farm", callback_data: "farm" },
-          { text: "💼 Work", callback_data: "work" }
+          { text: "⛏ FARM", callback_data: "farm" },
+          { text: "💼 WORK", callback_data: "work" }
         ],
         [
-          { text: "⚔ Battle", callback_data: "battle" },
-          { text: "📦 Case", callback_data: "case" }
+          { text: "⚔ BATTLE", callback_data: "battle" },
+          { text: "📦 CASE", callback_data: "case" }
         ],
         [
-          { text: "💰 Balance", callback_data: "balance" }
+          { text: "💰 BALANCE", callback_data: "balance" }
+        ],
+        [
+          { text: "⬅ BACK", callback_data: "back" }
         ]
       ]
     }
@@ -74,36 +77,40 @@ bot.on("callback_query", async (q) => {
 
   let u = await getUser(chatId, q.from.username);
 
-  let text = "";
+  const now = Date.now();
 
-  // ===== FARM =====
+  // ================= FARM (6h)
   if (q.data === "farm") {
-    let gain = Math.floor(Math.random() * 10) + 1;
+    const cd = 6 * 60 * 60 * 1000;
+
+    if (u.lastFarm && now - u.lastFarm < cd) {
+      const h = Math.ceil((cd - (now - u.lastFarm)) / 3600000);
+
+      return bot.editMessageText(`⛏ FARM cooldown: ${h}h`, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...menu()
+      });
+    }
+
+    let gain = Math.floor(Math.random() * 10) + 5;
     if (u.vip) gain *= 2;
 
     u.coins += gain;
     u.xp += 5;
     u.level = level(u.xp);
-
-    text = `⛏ Farm...\n+${gain} coins`;
+    u.lastFarm = now;
 
     await users.updateOne({ chatId }, { $set: u });
 
-    await bot.editMessageText(text, {
+    return bot.editMessageText(`⛏ FARM +${gain}`, {
       chat_id: chatId,
-      message_id: messageId
+      message_id: messageId,
+      ...menu()
     });
-
-    return setTimeout(() => {
-      bot.editMessageText("🎮 MENU", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...menu()
-      });
-    }, 1200);
   }
 
-  // ===== WORK =====
+  // ================= WORK
   if (q.data === "work") {
     let reward = Math.random() < 0.7 ? 5 : Math.random() < 0.95 ? 20 : 100;
     if (u.vip) reward *= 2;
@@ -112,111 +119,126 @@ bot.on("callback_query", async (q) => {
     u.xp += 10;
     u.level = level(u.xp);
 
-    text = `💼 Work...\n+${reward} coins`;
-
     await users.updateOne({ chatId }, { $set: u });
 
-    await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId
-    });
-
-    return setTimeout(() => {
-      bot.editMessageText("🎮 MENU", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...menu()
-      });
-    }, 1200);
-  }
-
-  // ===== BALANCE =====
-  if (q.data === "balance") {
-    text = `💰 Coins: ${u.coins}
-💎 Gems: ${u.gems}
-⭐ XP: ${u.xp}
-📊 Level: ${u.level}
-👑 VIP: ${u.vip ? "YES" : "NO"}
-🏆 Wins: ${u.wins}`;
-
-    await bot.editMessageText(text, {
+    return bot.editMessageText(`💼 WORK +${reward}`, {
       chat_id: chatId,
       message_id: messageId,
       ...menu()
     });
   }
 
-  // ===== CASE =====
+  // ================= BALANCE
+  if (q.data === "balance") {
+    return bot.editMessageText(
+`💰 ${u.coins}
+💎 ${u.gems}
+⭐ XP ${u.xp}
+📊 LVL ${u.level}
+👑 VIP ${u.vip ? "YES" : "NO"}
+🏆 WINS ${u.wins}`,
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        ...menu()
+      }
+    );
+  }
+
+  // ================= CASE (24h)
   if (q.data === "case") {
-    const cost = 20;
+    const cd = 24 * 60 * 60 * 1000;
 
-    if (u.coins < cost) {
-      text = "❌ Not enough coins";
-    } else {
-      u.coins -= cost;
+    if (u.lastCase && now - u.lastCase < cd) {
+      const h = Math.ceil((cd - (now - u.lastCase)) / 3600000);
 
-      const roll = Math.random();
-      const reward = roll < 0.6 ? 10 : roll < 0.9 ? 30 : 100;
-
-      u.coins += reward;
-      u.xp += 15;
-
-      text = `📦 Case opened!\n+${reward}`;
-    }
-
-    await users.updateOne({ chatId }, { $set: u });
-
-    await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId
-    });
-
-    return setTimeout(() => {
-      bot.editMessageText("🎮 MENU", {
+      return bot.editMessageText(`📦 CASE cooldown: ${h}h`, {
         chat_id: chatId,
         message_id: messageId,
         ...menu()
       });
-    }, 1200);
+    }
+
+    if (u.coins < 20) {
+      return bot.editMessageText("❌ Not enough coins", {
+        chat_id: chatId,
+        message_id: messageId,
+        ...menu()
+      });
+    }
+
+    u.coins -= 20;
+
+    const reward = Math.random() < 0.6 ? 10 : Math.random() < 0.9 ? 30 : 100;
+
+    u.coins += reward;
+    u.xp += 15;
+    u.lastCase = now;
+
+    await users.updateOne({ chatId }, { $set: u });
+
+    return bot.editMessageText(`📦 CASE +${reward}`, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...menu()
+    });
   }
 
-  // ===== BATTLE =====
+  // ================= BATTLE (HP)
   if (q.data === "battle") {
     const all = await users.find().toArray();
     const enemy = all[Math.floor(Math.random() * all.length)];
 
     if (!enemy || enemy.chatId === u.chatId) {
-      text = "❌ No enemy found";
-    } else {
-      const win =
-        Math.random() * u.level > Math.random() * enemy.level;
-
-      if (win) {
-        u.coins += 30;
-        u.wins += 1;
-        text = `⚔ WIN vs ${enemy.username}`;
-      } else {
-        text = `💀 LOSE vs ${enemy.username}`;
-      }
-    }
-
-    await users.updateOne({ chatId }, { $set: u });
-
-    await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId
-    });
-
-    return setTimeout(() => {
-      bot.editMessageText("🎮 MENU", {
+      return bot.editMessageText("⚔ No enemy", {
         chat_id: chatId,
         message_id: messageId,
         ...menu()
       });
-    }, 1200);
+    }
+
+    let myHP = u.level * 10;
+    let enemyHP = enemy.level * 10;
+
+    let log = `⚔ ${u.username} vs ${enemy.username}\n\n`;
+
+    while (myHP > 0 && enemyHP > 0) {
+      const myHit = Math.floor(Math.random() * 10 + u.level);
+      const enemyHit = Math.floor(Math.random() * 10 + enemy.level);
+
+      enemyHP -= myHit;
+      myHP -= enemyHit;
+
+      log += `You -${myHit} | Enemy -${enemyHit}\n`;
+    }
+
+    if (myHP > enemyHP) {
+      u.coins += 30;
+      u.wins += 1;
+      log += "\n🏆 WIN";
+    } else {
+      log += "\n💀 LOSE";
+    }
+
+    await users.updateOne({ chatId }, { $set: u });
+
+    return bot.editMessageText(log, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...menu()
+    });
+  }
+
+  // ================= BACK
+  if (q.data === "back") {
+    return bot.editMessageText("🎮 MENU", {
+      chat_id: chatId,
+      message_id: messageId,
+      ...menu()
+    });
   }
 
   bot.answerCallbackQuery(q.id);
 });
 
-console.log("🚀 FULL GAME BOT RUNNING");
+console.log("🚀 GAME BOT READY");
