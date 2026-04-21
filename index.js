@@ -27,13 +27,9 @@ async function getUser(chatId, username) {
       chatId,
       username: username || "player",
       coins: 0,
-      gems: 0,
       xp: 0,
       level: 1,
-      wins: 0,
-      vip: false,
-      lastFarm: 0,
-      lastCase: 0
+      wins: 0
     };
 
     await users.insertOne(u);
@@ -49,12 +45,7 @@ function menu() {
       inline_keyboard: [
         [{ text: "🏠 HOME", callback_data: "home" }],
         [
-          { text: "⛏ FARM", callback_data: "tab_farm" },
           { text: "⚔ BATTLE", callback_data: "tab_battle" }
-        ],
-        [
-          { text: "📦 CASE", callback_data: "tab_case" },
-          { text: "💰 PROFILE", callback_data: "tab_profile" }
         ]
       ]
     }
@@ -64,7 +55,7 @@ function menu() {
 // ===== START =====
 bot.onText(/\/start/, async (msg) => {
   await getUser(msg.chat.id, msg.from.username);
-  bot.sendMessage(msg.chat.id, "🎮 GAME READY", menu());
+  bot.sendMessage(msg.chat.id, "🎮 READY", menu());
 });
 
 // ===== CALLBACK =====
@@ -73,127 +64,10 @@ bot.on("callback_query", async (q) => {
   const messageId = q.message.message_id;
 
   const u = await getUser(chatId, q.from.username);
-  const now = Date.now();
 
-  // ⚡ ALWAYS FAST ACK (fix lag)
   bot.answerCallbackQuery(q.id).catch(() => {});
 
-  // ================= HOME
-  if (q.data === "home") {
-    return bot.editMessageText("🏠 MENU", {
-      chat_id: chatId,
-      message_id: messageId,
-      ...menu()
-    });
-  }
-
-  // ================= FARM TAB
-  if (q.data === "tab_farm") {
-    return bot.editMessageText("⛏ FARM TAB", {
-      chat_id: chatId,
-      message_id: messageId,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "⛏ FARM", callback_data: "farm" }],
-          [{ text: "⬅ BACK", callback_data: "home" }]
-        ]
-      }
-    });
-  }
-
-  // ================= FARM
-  if (q.data === "farm") {
-    const cd = 6 * 60 * 60 * 1000;
-
-    if (u.lastFarm && now - u.lastFarm < cd) {
-      const h = Math.ceil((cd - (now - u.lastFarm)) / 3600000);
-
-      return bot.editMessageText(`⛏ cooldown ${h}h`, {
-        chat_id: chatId,
-        message_id: messageId,
-        ...menu()
-      });
-    }
-
-    const gain = Math.floor(Math.random() * 10) + 5;
-
-    u.coins += gain;
-    u.xp += 5;
-    u.level = level(u.xp);
-    u.lastFarm = now;
-
-    await users.updateOne({ chatId }, { $set: u });
-
-    return bot.editMessageText(`⛏ +${gain}`, {
-      chat_id: chatId,
-      message_id: messageId,
-      ...menu()
-    });
-  }
-
-  // ================= CASE TAB
-  if (q.data === "tab_case") {
-    return bot.editMessageText("📦 CASE TAB", {
-      chat_id: chatId,
-      message_id: messageId,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📦 OPEN", callback_data: "case" }],
-          [{ text: "⬅ BACK", callback_data: "home" }]
-        ]
-      }
-    });
-  }
-
-  // ================= CASE
-  if (q.data === "case") {
-    const cd = 24 * 60 * 60 * 1000;
-
-    if (u.lastCase && now - u.lastCase < cd) {
-      const h = Math.ceil((cd - (now - u.lastCase)) / 3600000);
-
-      return bot.editMessageText(`📦 cooldown ${h}h`, {
-        chat_id: chatId,
-        message_id: messageId,
-        ...menu()
-      });
-    }
-
-    const reward = Math.random() < 0.6 ? 10 : 30;
-
-    u.coins += reward;
-    u.lastCase = now;
-
-    await users.updateOne({ chatId }, { $set: u });
-
-    return bot.editMessageText(`📦 +${reward}`, {
-      chat_id: chatId,
-      message_id: messageId,
-      ...menu()
-    });
-  }
-
-  // ================= PROFILE
-  if (q.data === "tab_profile") {
-    return bot.editMessageText(
-`👤 PROFILE
-💰 ${u.coins}
-⭐ XP ${u.xp}
-📊 LVL ${u.level}
-🏆 WINS ${u.wins}`,
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "⬅ BACK", callback_data: "home" }]
-          ]
-        }
-      }
-    );
-  }
-
-  // ================= BATTLE TAB
+  // ================= BATTLE MENU
   if (q.data === "tab_battle") {
     const all = await users.find().toArray();
 
@@ -203,7 +77,7 @@ bot.on("callback_query", async (q) => {
         { text: `⚔ ${op.username}`, callback_data: `pvp_${op.chatId}` }
       ]);
 
-    return bot.editMessageText("⚔ SELECT PLAYER", {
+    return bot.editMessageText("⚔ SELECT OPPONENT", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: {
@@ -215,7 +89,7 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= PVP REQUEST
+  // ================= START PVP
   if (q.data.startsWith("pvp_")) {
     const enemyId = Number(q.data.split("_")[1]);
     const battleId = `${chatId}_${enemyId}`;
@@ -223,10 +97,10 @@ bot.on("callback_query", async (q) => {
     battles.set(battleId, {
       p1: chatId,
       p2: enemyId,
+      round: 1,
       p1Score: 0,
       p2Score: 0,
-      round: 1,
-      answered: new Set()
+      action: {}
     });
 
     await bot.sendMessage(enemyId, `⚔ Battle request`, {
@@ -240,7 +114,7 @@ bot.on("callback_query", async (q) => {
       }
     });
 
-    return bot.editMessageText("📩 sent", {
+    return bot.editMessageText("📩 SENT", {
       chat_id: chatId,
       message_id: messageId,
       ...menu()
@@ -258,11 +132,13 @@ bot.on("callback_query", async (q) => {
     const battleId = q.data.replace("decline_", "");
     const b = battles.get(battleId);
 
+    if (!b) return;
+
     await bot.sendMessage(b.p1, "❌ declined");
     battles.delete(battleId);
   }
 
-  // ================= ACTIONS (FAST FIXED)
+  // ================= ACTIONS (IMPORTANT FIX)
   if (q.data.startsWith("atk_") || q.data.startsWith("def_")) {
     const [type, battleId] = q.data.split("_");
     const b = battles.get(battleId);
@@ -271,47 +147,41 @@ bot.on("callback_query", async (q) => {
 
     const isP1 = chatId === b.p1;
 
-    const dmg =
+    // save action instantly
+    b.action[chatId] = type;
+
+    // WAIT BOTH PLAYERS
+    if (!b.action[b.p1] || !b.action[b.p2]) return;
+
+    // calculate round
+    const p1Type = b.action[b.p1];
+    const p2Type = b.action[b.p2];
+
+    const calc = (type) =>
       type === "atk"
         ? Math.floor(Math.random() * 10) + 5
         : Math.floor(Math.random() * 4);
 
-    if (isP1) b.p1Score += dmg;
-    else b.p2Score += dmg;
+    const p1Gain = calc(p1Type);
+    const p2Gain = calc(p2Type);
 
-    b.answered.add(chatId);
+    b.p1Score += p1Gain;
+    b.p2Score += p2Gain;
 
-    if (b.answered.size < 2) return;
-
-    b.answered.clear();
+    b.action = {}; // reset for next round
     b.round++;
 
-    if (b.round > 3) {
-      const p1 = await users.findOne({ chatId: b.p1 });
-      const p2 = await users.findOne({ chatId: b.p2 });
-
-      let res = `⚔ RESULT\n${p1.username}: ${b.p1Score}\n${p2.username}: ${b.p2Score}`;
-
-      if (b.p1Score > b.p2Score) {
-        res += `\n🏆 ${p1.username}`;
-        await users.updateOne({ chatId: b.p1 }, { $inc: { coins: 30, wins: 1 } });
-      } else {
-        res += `\n🏆 ${p2.username}`;
-        await users.updateOne({ chatId: b.p2 }, { $inc: { coins: 30, wins: 1 } });
-      }
-
-      battles.delete(battleId);
-
-      await bot.sendMessage(b.p1, res, menu());
-      await bot.sendMessage(b.p2, res, menu());
-      return;
+    // ROUND FLOW FIX: instantly continue
+    if (b.round <= 3) {
+      return startRound(battleId);
     }
 
-    startRound(battleId);
+    // FINISH
+    finishBattle(battleId);
   }
 });
 
-// ===== ROUND =====
+// ===== ROUND START =====
 async function startRound(battleId) {
   const b = battles.get(battleId);
 
@@ -332,4 +202,27 @@ async function startRound(battleId) {
   await bot.sendMessage(b.p2, msg, kb);
 }
 
-console.log("🚀 FAST GAME RUNNING");
+// ===== FINISH =====
+async function finishBattle(battleId) {
+  const b = battles.get(battleId);
+
+  const p1 = await users.findOne({ chatId: b.p1 });
+  const p2 = await users.findOne({ chatId: b.p2 });
+
+  let res = `⚔ FINISH\n\n${p1.username}: ${b.p1Score}\n${p2.username}: ${b.p2Score}\n\n`;
+
+  if (b.p1Score > b.p2Score) {
+    res += `🏆 ${p1.username} WIN`;
+    await users.updateOne({ chatId: b.p1 }, { $inc: { coins: 30, wins: 1 } });
+  } else {
+    res += `🏆 ${p2.username} WIN`;
+    await users.updateOne({ chatId: b.p2 }, { $inc: { coins: 30, wins: 1 } });
+  }
+
+  battles.delete(battleId);
+
+  await bot.sendMessage(b.p1, res, menu());
+  await bot.sendMessage(b.p2, res, menu());
+}
+
+console.log("🚀 FAST ROUND GAME READY");
