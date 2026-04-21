@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
 import TelegramBot from "node-telegram-bot-api";
-import express from "express";
 import { MongoClient } from "mongodb";
 
 dotenv.config();
@@ -15,116 +14,170 @@ await client.connect();
 const db = client.db("game");
 const users = db.collection("users");
 
-// ===== EXPRESS SITE =====
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get("/", (req, res) => {
-  res.send(`
-    <h1>🎮 Game Leaderboard</h1>
-    <p>Open /top or /players</p>
-  `);
-});
-
-// API: всі гравці
-app.get("/players", async (req, res) => {
-  const data = await users.find().toArray();
-  res.json(data);
-});
-
-// API: топ
-app.get("/top", async (req, res) => {
-  const data = await users
-    .find()
-    .sort({ coins: -1 })
-    .limit(10)
-    .toArray();
-
-  res.json(data);
-});
-
-app.listen(PORT, () => {
-  console.log("🌐 Site running on port", PORT);
-});
-
 // ===== HELPERS =====
-async function getUser(chatId) {
-  return await users.findOne({ chatId });
+async function getUser(chatId, username) {
+  let user = await users.findOne({ chatId });
+
+  if (!user) {
+    user = {
+      chatId,
+      username: username || "player",
+      coins: 0,
+      xp: 0,
+      level: 1,
+      wins: 0
+    };
+    await users.insertOne(user);
+  }
+
+  return user;
+}
+
+function calcLevel(xp) {
+  return Math.floor(xp / 100) + 1;
 }
 
 // ===== START =====
 bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-  const username = msg.from.username || "no_name";
+  await getUser(msg.chat.id, msg.from.username);
 
-  await users.updateOne(
-    { chatId },
-    {
-      $setOnInsert: {
-        chatId,
-        username,
-        coins: 0,
-        level: 1
-      }
-    },
-    { upsert: true }
+  bot.sendMessage(msg.chat.id,
+`🎮 Welcome to GAME BOT!
+
+Команди:
+⚒ /farm
+💼 /work
+⚔ /battle
+💰 /balance
+🎁 /daily
+🏆 /top
+📦 /case`
   );
-
-  bot.sendMessage(chatId, "🎮 Гру запущено!\n/farm /balance /top");
 });
 
 // ===== FARM =====
 bot.onText(/\/farm/, async (msg) => {
-  const chatId = msg.chat.id;
+  const u = await getUser(msg.chat.id, msg.from.username);
 
-  const reward = Math.floor(Math.random() * 10) + 1;
+  const gain = Math.floor(Math.random() * 10) + 1;
 
-  await users.updateOne(
-    { chatId },
-    { $inc: { coins: reward } }
-  );
+  u.coins += gain;
+  u.xp += 5;
+  u.level = calcLevel(u.xp);
 
-  bot.sendMessage(chatId, `⚡ +${reward} монет`);
+  await users.updateOne({ chatId: u.chatId }, { $set: u });
+
+  bot.sendMessage(msg.chat.id, `⛏ +${gain} монет`);
+});
+
+// ===== WORK =====
+bot.onText(/\/work/, async (msg) => {
+  const u = await getUser(msg.chat.id, msg.from.username);
+
+  const chance = Math.random();
+
+  let reward = 0;
+
+  if (chance < 0.7) reward = 5;
+  else if (chance < 0.95) reward = 20;
+  else reward = 100;
+
+  u.coins += reward;
+  u.xp += 10;
+  u.level = calcLevel(u.xp);
+
+  await users.updateOne({ chatId: u.chatId }, { $set: u });
+
+  bot.sendMessage(msg.chat.id, `💼 Робота: +${reward} монет`);
 });
 
 // ===== BALANCE =====
 bot.onText(/\/balance/, async (msg) => {
-  const chatId = msg.chat.id;
+  const u = await getUser(msg.chat.id, msg.from.username);
 
-  const user = await getUser(chatId);
+  bot.sendMessage(msg.chat.id,
+`💰 Монети: ${u.coins}
+⭐ XP: ${u.xp}
+📊 Level: ${u.level}`
+  );
+});
 
-  bot.sendMessage(chatId, `💰 Баланс: ${user?.coins || 0}`);
+// ===== DAILY =====
+bot.onText(/\/daily/, async (msg) => {
+  const u = await getUser(msg.chat.id, msg.from.username);
+
+  const reward = 50;
+
+  u.coins += reward;
+  u.xp += 20;
+
+  await users.updateOne({ chatId: u.chatId }, { $set: u });
+
+  bot.sendMessage(msg.chat.id, `🎁 Daily +${reward}`);
+});
+
+// ===== CASE =====
+bot.onText(/\/case/, async (msg) => {
+  const u = await getUser(msg.chat.id, msg.from.username);
+
+  const cost = 20;
+  if (u.coins < cost) return bot.sendMessage(msg.chat.id, "❌ нема монет");
+
+  u.coins -= cost;
+
+  const roll = Math.random();
+
+  let reward = 0;
+
+  if (roll < 0.6) reward = 10;
+  else if (roll < 0.9) reward = 30;
+  else reward = 100;
+
+  u.coins += reward;
+  u.xp += 15;
+
+  await users.updateOne({ chatId: u.chatId }, { $set: u });
+
+  bot.sendMessage(msg.chat.id, `📦 кейс: +${reward}`);
+});
+
+// ===== BATTLE =====
+bot.onText(/\/battle/, async (msg) => {
+  const usersList = await users.find().toArray();
+
+  const me = await getUser(msg.chat.id, msg.from.username);
+
+  const enemy = usersList[Math.floor(Math.random() * usersList.length)];
+
+  if (!enemy || enemy.chatId === me.chatId)
+    return bot.sendMessage(msg.chat.id, "нема противника");
+
+  const myPower = Math.random() * me.level;
+  const enemyPower = Math.random() * enemy.level;
+
+  if (myPower > enemyPower) {
+    me.coins += 20;
+    me.wins += 1;
+
+    await users.updateOne({ chatId: me.chatId }, { $set: me });
+
+    bot.sendMessage(msg.chat.id, `⚔ ти переміг ${enemy.username}`);
+  } else {
+    bot.sendMessage(msg.chat.id, `💀 ти програв ${enemy.username}`);
+  }
 });
 
 // ===== TOP =====
 bot.onText(/\/top/, async (msg) => {
-  const chatId = msg.chat.id;
-
   const top = await users.find().sort({ coins: -1 }).limit(10).toArray();
 
-  let text = "🏆 TOP гравців:\n\n";
+  let text = "🏆 TOP:\n\n";
 
   top.forEach((u, i) => {
-    text += `${i + 1}. ${u.username} — ${u.coins} 💰\n`;
+    text += `${i + 1}. ${u.username} — ${u.coins}💰\n`;
   });
 
-  bot.sendMessage(chatId, text);
+  bot.sendMessage(msg.chat.id, text);
 });
 
-// ===== ADMIN GIVE =====
-const ADMIN_ID = Number(process.env.ADMIN_ID);
-
-bot.onText(/\/add (\d+)/, async (msg, match) => {
-  if (msg.chat.id !== ADMIN_ID) return;
-
-  const amount = Number(match[1]);
-
-  await users.updateOne(
-    { chatId: msg.chat.id },
-    { $inc: { coins: amount } }
-  );
-
-  bot.sendMessage(msg.chat.id, `✅ +${amount}`);
-});
-
-console.log("🤖 Bot started");
+console.log("🚀 Game bot started");
