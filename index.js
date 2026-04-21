@@ -12,8 +12,8 @@ await client.connect();
 const db = client.db("game");
 const users = db.collection("users");
 
-// ===== LEVEL =====
-const level = (xp) => Math.floor(xp / 100) + 1;
+// ===== CONFIG =====
+const CHANNEL = "PVEmpire1";
 
 // ===== USER =====
 async function getUser(chatId, username) {
@@ -27,7 +27,10 @@ async function getUser(chatId, username) {
       xp: 0,
       level: 1,
       lastFarm: 0,
-      lastCase: 0
+      lastCase: 0,
+      tasks: {
+        sub: false
+      }
     };
 
     await users.insertOne(u);
@@ -36,8 +39,11 @@ async function getUser(chatId, username) {
   return u;
 }
 
+// ===== LEVEL =====
+const level = (xp) => Math.floor(xp / 100) + 1;
+
 // ===== MENU =====
-function mainMenu() {
+function menu() {
   return {
     reply_markup: {
       inline_keyboard: [
@@ -48,6 +54,9 @@ function mainMenu() {
         ],
         [
           { text: "📦 CASE", callback_data: "tab_case" },
+          { text: "📜 TASKS", callback_data: "tab_tasks" }
+        ],
+        [
           { text: "👤 PROFILE", callback_data: "tab_profile" }
         ]
       ]
@@ -58,7 +67,7 @@ function mainMenu() {
 // ===== START =====
 bot.onText(/\/start/, async (msg) => {
   await getUser(msg.chat.id, msg.from.username);
-  bot.sendMessage(msg.chat.id, "🎮 GAME READY", mainMenu());
+  bot.sendMessage(msg.chat.id, "🎮 GAME READY", menu());
 });
 
 // ===== CALLBACK =====
@@ -76,25 +85,84 @@ bot.on("callback_query", async (q) => {
     return bot.editMessageText("🏠 MAIN MENU", {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
+  }
+
+  // ================= TASKS TAB
+  if (q.data === "tab_tasks") {
+    return bot.editMessageText(
+`📜 TASKS
+
+1️⃣ Subscribe to channel:
+👉 https://t.me/PVEmpire1
+
+Status: ${u.tasks.sub ? "✅ DONE" : "❌ NOT DONE"}`,
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔍 CHECK", callback_data: "check_sub" }],
+            [{ text: "⬅ BACK", callback_data: "home" }]
+          ]
+        }
+      }
+    );
+  }
+
+  // ================= CHECK SUBSCRIPTION
+  if (q.data === "check_sub") {
+    try {
+      const res = await bot.getChatMember(`@${CHANNEL}`, chatId);
+
+      const isMember =
+        res.status === "member" ||
+        res.status === "administrator" ||
+        res.status === "creator";
+
+      if (isMember) {
+        u.tasks.sub = true;
+        u.coins += 25;
+        u.xp += 10;
+        u.level = level(u.xp);
+
+        await users.updateOne({ chatId }, { $set: u });
+
+        return bot.editMessageText("✅ TASK COMPLETED +25 COINS", {
+          chat_id: chatId,
+          message_id: messageId,
+          ...menu()
+        });
+      } else {
+        return bot.answerCallbackQuery(q.id, {
+          text: "❌ You are not subscribed",
+          show_alert: true
+        });
+      }
+    } catch (e) {
+      return bot.answerCallbackQuery(q.id, {
+        text: "⚠️ Can't verify channel",
+        show_alert: true
+      });
+    }
   }
 
   // ================= FARM TAB
   if (q.data === "tab_farm") {
-    return bot.editMessageText("⛏ FARM TAB", {
+    return bot.editMessageText("⛏ FARM", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: {
         inline_keyboard: [
-          [{ text: "⛏ FARM NOW", callback_data: "farm" }],
+          [{ text: "⛏ FARM", callback_data: "farm" }],
           [{ text: "⬅ BACK", callback_data: "home" }]
         ]
       }
     });
   }
 
-  // ================= FARM (6h)
+  // ================= FARM
   if (q.data === "farm") {
     const cd = 6 * 60 * 60 * 1000;
 
@@ -104,7 +172,7 @@ bot.on("callback_query", async (q) => {
       return bot.editMessageText(`⛏ cooldown ${h}h`, {
         chat_id: chatId,
         message_id: messageId,
-        ...mainMenu()
+        ...menu()
       });
     }
 
@@ -117,21 +185,21 @@ bot.on("callback_query", async (q) => {
 
     await users.updateOne({ chatId }, { $set: u });
 
-    return bot.editMessageText(`⛏ +${gain} coins`, {
+    return bot.editMessageText(`⛏ +${gain}`, {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
   // ================= WORK TAB
   if (q.data === "tab_work") {
-    return bot.editMessageText("💼 WORK TAB", {
+    return bot.editMessageText("💼 WORK", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: {
         inline_keyboard: [
-          [{ text: "💼 WORK NOW", callback_data: "work" }],
+          [{ text: "💼 WORK", callback_data: "work" }],
           [{ text: "⬅ BACK", callback_data: "home" }]
         ]
       }
@@ -140,38 +208,36 @@ bot.on("callback_query", async (q) => {
 
   // ================= WORK
   if (q.data === "work") {
-    const reward =
-      Math.random() < 0.7 ? 5 :
-      Math.random() < 0.95 ? 20 : 50;
+    const reward = Math.random() < 0.7 ? 10 : 25;
 
     u.coins += reward;
-    u.xp += 10;
+    u.xp += 8;
     u.level = level(u.xp);
 
     await users.updateOne({ chatId }, { $set: u });
 
-    return bot.editMessageText(`💼 +${reward} coins`, {
+    return bot.editMessageText(`💼 +${reward}`, {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
   // ================= CASE TAB
   if (q.data === "tab_case") {
-    return bot.editMessageText("📦 CASE TAB", {
+    return bot.editMessageText("📦 CASE", {
       chat_id: chatId,
       message_id: messageId,
       reply_markup: {
         inline_keyboard: [
-          [{ text: "📦 OPEN CASE", callback_data: "case" }],
+          [{ text: "📦 OPEN", callback_data: "case" }],
           [{ text: "⬅ BACK", callback_data: "home" }]
         ]
       }
     });
   }
 
-  // ================= CASE (24h)
+  // ================= CASE
   if (q.data === "case") {
     const cd = 24 * 60 * 60 * 1000;
 
@@ -181,25 +247,25 @@ bot.on("callback_query", async (q) => {
       return bot.editMessageText(`📦 cooldown ${h}h`, {
         chat_id: chatId,
         message_id: messageId,
-        ...mainMenu()
+        ...menu()
       });
     }
 
-    const reward = Math.random() < 0.6 ? 10 : 30;
+    const reward = Math.random() < 0.7 ? 15 : 40;
 
     u.coins += reward;
     u.lastCase = now;
 
     await users.updateOne({ chatId }, { $set: u });
 
-    return bot.editMessageText(`📦 +${reward} coins`, {
+    return bot.editMessageText(`📦 +${reward}`, {
       chat_id: chatId,
       message_id: messageId,
-      ...mainMenu()
+      ...menu()
     });
   }
 
-  // ================= PROFILE TAB
+  // ================= PROFILE
   if (q.data === "tab_profile") {
     return bot.editMessageText(
 `👤 PROFILE
@@ -220,4 +286,4 @@ bot.on("callback_query", async (q) => {
   }
 });
 
-console.log("🚀 CLEAN GAME RUNNING");
+console.log("🚀 GAME WITH TASKS READY");
