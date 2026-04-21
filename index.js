@@ -1,114 +1,151 @@
 require("dotenv").config();
-const TelegramBot = require("node-telegram-bot-api");
+
+const { Telegraf } = require("telegraf");
 const mongoose = require("mongoose");
 
-const bot = new TelegramBot(process.env.TOKEN, { polling: true });
-
-// 🔗 MongoDB
+// ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB підключено"))
-  .catch(err => console.log(err));
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.log("DB error:", err));
 
-// 📦 Схема користувача
+// ================= BOT =================
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// ================= MODEL =================
 const userSchema = new mongoose.Schema({
   userId: Number,
-  username: String,
-  pv: { type: Number, default: 0 },
-  lastClaim: { type: Number, default: Date.now }
+  coins: { type: Number, default: 0 },
+
+  tapPower: { type: Number, default: 1 },
+  level: { type: Number, default: 1 },
+
+  incomePerHour: { type: Number, default: 0 },
+  lastClaim: { type: Date, default: Date.now },
+
+  lastTap: Date
 });
 
 const User = mongoose.model("User", userSchema);
 
-// 🧩 Отримати або створити юзера
-async function getUser(msg) {
-  let user = await User.findOne({ userId: msg.from.id });
-
+// ================= FUNCTIONS =================
+async function getUser(id) {
+  let user = await User.findOne({ userId: id });
   if (!user) {
-    user = new User({
-      userId: msg.from.id,
-      username: msg.from.username || msg.from.first_name
-    });
-    await user.save();
+    user = await User.create({ userId: id });
   }
-
   return user;
 }
 
-// ▶️ /start
-bot.onText(/\/start/, async (msg) => {
-  await getUser(msg);
-
-  bot.sendMessage(msg.chat.id,
-`👋 Привіт!
-
-💰 Це Pv Empire
-Тапай і заробляй PV!
-
-Команди:
-/tap - тапати
-/balance - баланс
-/top - топ гравців
-/claim - забрати пасивний дохід`
-  );
-});
-
-// 👆 Тапання
-bot.onText(/\/tap/, async (msg) => {
-  const user = await getUser(msg);
-
-  const earn = Math.floor(Math.random() * 10) + 1;
-  user.pv += earn;
-
-  await user.save();
-
-  bot.sendMessage(msg.chat.id, `👆 +${earn} PV`);
-});
-
-// 💰 Баланс
-bot.onText(/\/balance/, async (msg) => {
-  const user = await getUser(msg);
-
-  bot.sendMessage(msg.chat.id,
-`💰 Баланс: ${user.pv} PV`
-  );
-});
-
-// ⏱ Пасивний дохід (раз на годину)
-bot.onText(/\/claim/, async (msg) => {
-  const user = await getUser(msg);
-
+function giveOfflineIncome(user) {
   const now = Date.now();
-  const diff = now - user.lastClaim;
+  const last = user.lastClaim ? user.lastClaim.getTime() : now;
 
-  if (diff < 3600000) {
-    const mins = Math.ceil((3600000 - diff) / 60000);
-    return bot.sendMessage(msg.chat.id,
-      `⏳ Зачекай ${mins} хв`
-    );
+  const hours = (now - last) / (1000 * 60 * 60);
+  const income = Math.floor(hours * user.incomePerHour);
+
+  if (income > 0) {
+    user.coins += income;
+    user.lastClaim = new Date();
   }
 
-  const reward = 50;
-  user.pv += reward;
-  user.lastClaim = now;
+  return income;
+}
+
+// ================= COMMANDS =================
+
+// START
+bot.start(async (ctx) => {
+  await getUser(ctx.from.id);
+  ctx.reply("👋 Вітаю! Пиши /tap щоб фармити Pv\n/shop — магазин\n/profile — профіль");
+});
+
+// TAP
+bot.command("tap", async (ctx) => {
+  const user = await getUser(ctx.from.id);
+
+  giveOfflineIncome(user);
+
+  const now = Date.now();
+  const last = user.lastTap ? user.lastTap.getTime() : 0;
+
+  if (now - last < 1000) {
+    return ctx.reply("⏳ Занадто швидко!");
+  }
+
+  user.coins += user.tapPower;
+  user.lastTap = new Date();
 
   await user.save();
 
-  bot.sendMessage(msg.chat.id,
-    `✅ +${reward} PV (пасивний дохід)`
+  ctx.reply(`💎 +${user.tapPower} Pv\nБаланс: ${user.coins}`);
+});
+
+// PROFILE
+bot.command("profile", async (ctx) => {
+  const user = await getUser(ctx.from.id);
+
+  const income = giveOfflineIncome(user);
+  await user.save();
+
+  ctx.reply(
+`👤 Профіль
+💰 Pv: ${user.coins}
+⚡ Tap: ${user.tapPower}
+⛏ Доход/год: ${user.incomePerHour}
+📊 Рівень: ${user.level}
+${income > 0 ? `\n💸 +${income} Pv (офлайн)` : ""}`
   );
 });
 
-// 🏆 Топ гравців
-bot.onText(/\/top/, async (msg) => {
-  const top = await User.find().sort({ pv: -1 }).limit(10);
+// SHOP
+bot.command("shop", (ctx) => {
+  ctx.reply(
+`🛒 Магазин:
 
-  let text = "🏆 ТОП ГРАВЦІВ:\n\n";
-
-  top.forEach((u, i) => {
-    text += `${i + 1}. ${u.username} — ${u.pv} PV\n`;
-  });
-
-  bot.sendMessage(msg.chat.id, text);
+1. ⚡ Tap +1 → 100 Pv (/buy_tap)
+2. ⛏ Доход +5/год → 200 Pv (/buy_income)
+`
+  );
 });
 
-console.log("🤖 Бот запущений");
+// BUY TAP
+bot.command("buy_tap", async (ctx) => {
+  const user = await getUser(ctx.from.id);
+  giveOfflineIncome(user);
+
+  const price = 100;
+
+  if (user.coins < price) {
+    return ctx.reply("❌ Не вистачає Pv");
+  }
+
+  user.coins -= price;
+  user.tapPower += 1;
+
+  await user.save();
+
+  ctx.reply("✅ Tap покращено!");
+});
+
+// BUY INCOME
+bot.command("buy_income", async (ctx) => {
+  const user = await getUser(ctx.from.id);
+  giveOfflineIncome(user);
+
+  const price = 200;
+
+  if (user.coins < price) {
+    return ctx.reply("❌ Не вистачає Pv");
+  }
+
+  user.coins -= price;
+  user.incomePerHour += 5;
+
+  await user.save();
+
+  ctx.reply("✅ Доход збільшено!");
+});
+
+// ================= START =================
+bot.launch();
+console.log("Bot started");
