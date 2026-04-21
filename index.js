@@ -27,8 +27,8 @@ async function getUser(chatId, username) {
       xp: 0,
       level: 1,
       lastFarm: 0,
-      lastCase: 0,
       lastWork: 0,
+      lastCase: 0,
       tasks: {
         sub: false
       }
@@ -74,7 +74,7 @@ function menu() {
 // ===== START =====
 bot.onText(/\/start/, async (msg) => {
   await getUser(msg.chat.id, msg.from.username);
-  bot.sendMessage(msg.chat.id, "🎮 GAME READY", menu());
+  bot.sendMessage(msg.chat.id, "🎮 GAME STARTED", menu());
 });
 
 // ===== CALLBACK =====
@@ -110,7 +110,7 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= FARM (6h)
+  // ================= FARM
   if (q.data === "farm") {
     const cd = 6 * 60 * 60 * 1000;
 
@@ -154,7 +154,7 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= WORK (5-50 coins)
+  // ================= WORK
   if (q.data === "work") {
     const cd = 3 * 60 * 60 * 1000;
 
@@ -200,7 +200,7 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= CASE (24h)
+  // ================= CASE
   if (q.data === "case") {
     const cd = 24 * 60 * 60 * 1000;
 
@@ -228,32 +228,8 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= TASKS TAB (FIXED)
+  // ================= TASKS (AUTO CHECK)
   if (q.data === "tab_tasks") {
-    const status = u.tasks?.sub ? "✅ DONE" : "❌ NOT DONE";
-
-    return bot.editMessageText(
-`📜 TASKS
-
-1️⃣ Subscribe:
-👉 https://t.me/PVEmpire1
-
-Status: ${status}`,
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔍 CHECK", callback_data: "check_sub" }],
-            [{ text: "⬅ BACK", callback_data: "home" }]
-          ]
-        }
-      }
-    );
-  }
-
-  // ================= CHECK SUB (FIXED SAFE)
-  if (q.data === "check_sub") {
     try {
       const res = await bot.getChatMember("@PVEmpire1", chatId);
 
@@ -262,29 +238,48 @@ Status: ${status}`,
         res.status === "administrator" ||
         res.status === "creator";
 
-      if (!isMember) {
-        return bot.answerCallbackQuery(q.id, {
-          text: "❌ You are not subscribed",
-          show_alert: true
-        });
+      if (isMember) {
+        if (!u.tasks.sub) {
+          u.tasks.sub = true;
+          u.coins += 25;
+          u.xp += 10;
+          u.level = level(u.xp);
+
+          await users.updateOne({ chatId }, { $set: u });
+        }
+
+        return bot.editMessageText(
+`📜 TASKS
+
+1️⃣ Subscribe:
+👉 https://t.me/PVEmpire1
+
+Status: ${u.tasks.sub ? "✅ DONE (+25)" : "❌ NOT DONE"}`,
+          {
+            chat_id: chatId,
+            message_id: messageId,
+            ...menu()
+          }
+        );
       }
 
-      u.tasks.sub = true;
-      u.coins += 25;
-      u.xp += 10;
-      u.level = level(u.xp);
+      return bot.editMessageText(
+`📜 TASKS
 
-      await users.updateOne({ chatId }, { $set: u });
+1️⃣ Subscribe:
+👉 https://t.me/PVEmpire1
 
-      return bot.editMessageText("✅ TASK COMPLETED +25 COINS", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...menu()
-      });
+Status: ❌ NOT DONE`,
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          ...menu()
+        }
+      );
 
     } catch (e) {
       return bot.answerCallbackQuery(q.id, {
-        text: "⚠️ Cannot verify channel",
+        text: "⚠️ Cannot check channel",
         show_alert: true
       });
     }
@@ -311,4 +306,4 @@ Status: ${status}`,
   }
 });
 
-console.log("🚀 FULL GAME WITH TASKS RUNNING");
+console.log("🚀 FULL GAME RUNNING");
