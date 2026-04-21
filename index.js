@@ -12,10 +12,13 @@ await client.connect();
 const db = client.db("game");
 const users = db.collection("users");
 
+// ===== PVP REQUESTS =====
+const pendingBattles = new Map();
+
 // ===== LEVEL =====
 const level = (xp) => Math.floor(xp / 100) + 1;
 
-// ===== GET USER =====
+// ===== USER =====
 async function getUser(chatId, username) {
   let u = await users.findOne({ chatId });
 
@@ -76,7 +79,6 @@ bot.on("callback_query", async (q) => {
   const messageId = q.message.message_id;
 
   let u = await getUser(chatId, q.from.username);
-
   const now = Date.now();
 
   // ================= FARM (6h)
@@ -184,45 +186,114 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ================= BATTLE (HP)
+  // ================= BATTLE MENU (select player)
   if (q.data === "battle") {
     const all = await users.find().toArray();
-    const enemy = all[Math.floor(Math.random() * all.length)];
 
-    if (!enemy || enemy.chatId === u.chatId) {
-      return bot.editMessageText("⚔ No enemy", {
-        chat_id: chatId,
-        message_id: messageId,
-        ...menu()
-      });
-    }
+    let keyboard = [];
+
+    all.forEach(op => {
+      if (op.chatId !== u.chatId) {
+        keyboard.push([
+          {
+            text: `⚔ ${op.username}`,
+            callback_data: `pvp_${op.chatId}`
+          }
+        ]);
+      }
+    });
+
+    return bot.editMessageText("⚔ Choose opponent:", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: {
+        inline_keyboard: [
+          ...keyboard,
+          [{ text: "⬅ BACK", callback_data: "back" }]
+        ]
+      }
+    });
+  }
+
+  // ================= SEND REQUEST
+  if (q.data.startsWith("pvp_")) {
+    const enemyId = Number(q.data.split("_")[1]);
+
+    pendingBattles.set(enemyId, chatId);
+
+    await bot.sendMessage(
+      enemyId,
+      `⚔ Battle request from ${u.username}`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "✅ ACCEPT", callback_data: `accept_${chatId}` },
+              { text: "❌ DECLINE", callback_data: `decline_${chatId}` }
+            ]
+          ]
+        }
+      }
+    );
+
+    return bot.editMessageText("📩 Request sent", {
+      chat_id: chatId,
+      message_id: messageId,
+      ...menu()
+    });
+  }
+
+  // ================= ACCEPT BATTLE
+  if (q.data.startsWith("accept_")) {
+    const attackerId = Number(q.data.split("_")[1]);
+
+    const attacker = await users.findOne({ chatId: attackerId });
+
+    if (!attacker) return;
 
     let myHP = u.level * 10;
-    let enemyHP = enemy.level * 10;
+    let enemyHP = attacker.level * 10;
 
-    let log = `⚔ ${u.username} vs ${enemy.username}\n\n`;
+    let log = `⚔ PvP\n${attacker.username} vs ${u.username}\n\n`;
 
     while (myHP > 0 && enemyHP > 0) {
-      const myHit = Math.floor(Math.random() * 10 + u.level);
-      const enemyHit = Math.floor(Math.random() * 10 + enemy.level);
+      const aHit = Math.floor(Math.random() * 10 + attacker.level);
+      const dHit = Math.floor(Math.random() * 10 + u.level);
 
-      enemyHP -= myHit;
-      myHP -= enemyHit;
+      enemyHP -= aHit;
+      myHP -= dHit;
 
-      log += `You -${myHit} | Enemy -${enemyHit}\n`;
+      log += `${attacker.username} -${aHit} | You -${dHit}\n`;
     }
 
     if (myHP > enemyHP) {
       u.coins += 30;
       u.wins += 1;
-      log += "\n🏆 WIN";
+      log += "\n🏆 YOU WIN";
     } else {
-      log += "\n💀 LOSE";
+      log += "\n💀 YOU LOSE";
     }
 
     await users.updateOne({ chatId }, { $set: u });
 
+    pendingBattles.delete(chatId);
+
     return bot.editMessageText(log, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...menu()
+    });
+  }
+
+  // ================= DECLINE
+  if (q.data.startsWith("decline_")) {
+    const attackerId = Number(q.data.split("_")[1]);
+
+    pendingBattles.delete(chatId);
+
+    await bot.sendMessage(attackerId, "❌ Battle declined");
+
+    return bot.editMessageText("❌ Declined", {
       chat_id: chatId,
       message_id: messageId,
       ...menu()
@@ -241,4 +312,4 @@ bot.on("callback_query", async (q) => {
   bot.answerCallbackQuery(q.id);
 });
 
-console.log("🚀 GAME BOT READY");
+console.log("🚀 FULL PVP GAME RUNNING");
