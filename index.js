@@ -1,151 +1,71 @@
-require("dotenv").config();
+import TelegramBot from "node-telegram-bot-api";
+import dotenv from "dotenv";
+import { MongoClient } from "mongodb";
 
-const { Telegraf } = require("telegraf");
-const mongoose = require("mongoose");
+dotenv.config();
 
-// ================= DB =================
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
-  .catch(err => console.log("DB error:", err));
+// BOT + DB
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const client = new MongoClient(process.env.MONGO_URL);
 
-// ================= BOT =================
-const bot = new Telegraf(process.env.BOT_TOKEN);
+await client.connect();
+const db = client.db("botdb");
+const users = db.collection("users");
 
-// ================= MODEL =================
-const userSchema = new mongoose.Schema({
-  userId: Number,
-  coins: { type: Number, default: 0 },
+// ===== START =====
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
 
-  tapPower: { type: Number, default: 1 },
-  level: { type: Number, default: 1 },
-
-  incomePerHour: { type: Number, default: 0 },
-  lastClaim: { type: Date, default: Date.now },
-
-  lastTap: Date
-});
-
-const User = mongoose.model("User", userSchema);
-
-// ================= FUNCTIONS =================
-async function getUser(id) {
-  let user = await User.findOne({ userId: id });
-  if (!user) {
-    user = await User.create({ userId: id });
-  }
-  return user;
-}
-
-function giveOfflineIncome(user) {
-  const now = Date.now();
-  const last = user.lastClaim ? user.lastClaim.getTime() : now;
-
-  const hours = (now - last) / (1000 * 60 * 60);
-  const income = Math.floor(hours * user.incomePerHour);
-
-  if (income > 0) {
-    user.coins += income;
-    user.lastClaim = new Date();
-  }
-
-  return income;
-}
-
-// ================= COMMANDS =================
-
-// START
-bot.start(async (ctx) => {
-  await getUser(ctx.from.id);
-  ctx.reply("👋 Вітаю! Пиши /tap щоб фармити Pv\n/shop — магазин\n/profile — профіль");
-});
-
-// TAP
-bot.command("tap", async (ctx) => {
-  const user = await getUser(ctx.from.id);
-
-  giveOfflineIncome(user);
-
-  const now = Date.now();
-  const last = user.lastTap ? user.lastTap.getTime() : 0;
-
-  if (now - last < 1000) {
-    return ctx.reply("⏳ Занадто швидко!");
-  }
-
-  user.coins += user.tapPower;
-  user.lastTap = new Date();
-
-  await user.save();
-
-  ctx.reply(`💎 +${user.tapPower} Pv\nБаланс: ${user.coins}`);
-});
-
-// PROFILE
-bot.command("profile", async (ctx) => {
-  const user = await getUser(ctx.from.id);
-
-  const income = giveOfflineIncome(user);
-  await user.save();
-
-  ctx.reply(
-`👤 Профіль
-💰 Pv: ${user.coins}
-⚡ Tap: ${user.tapPower}
-⛏ Доход/год: ${user.incomePerHour}
-📊 Рівень: ${user.level}
-${income > 0 ? `\n💸 +${income} Pv (офлайн)` : ""}`
+  await users.updateOne(
+    { chatId },
+    { $setOnInsert: { chatId, coins: 0 } },
+    { upsert: true }
   );
+
+  bot.sendMessage(chatId, "👋 Бот запущено!\nКоманди:\n/balance\n/farm");
 });
 
-// SHOP
-bot.command("shop", (ctx) => {
-  ctx.reply(
-`🛒 Магазин:
+// ===== BALANCE =====
+bot.onText(/\/balance/, async (msg) => {
+  const chatId = msg.chat.id;
 
-1. ⚡ Tap +1 → 100 Pv (/buy_tap)
-2. ⛏ Доход +5/год → 200 Pv (/buy_income)
-`
+  const user = await users.findOne({ chatId });
+
+  bot.sendMessage(chatId, `💰 Баланс: ${user?.coins || 0} монет`);
+});
+
+// ===== FARM =====
+bot.onText(/\/farm/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  const reward = Math.floor(Math.random() * 10) + 1;
+
+  await users.updateOne(
+    { chatId },
+    { $inc: { coins: reward } }
   );
+
+  bot.sendMessage(chatId, `⚡ +${reward} монет`);
 });
 
-// BUY TAP
-bot.command("buy_tap", async (ctx) => {
-  const user = await getUser(ctx.from.id);
-  giveOfflineIncome(user);
+// ===== ADMIN ADD COINS =====
+const ADMIN_ID = Number(process.env.ADMIN_ID);
 
-  const price = 100;
+bot.onText(/\/add (\d+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
 
-  if (user.coins < price) {
-    return ctx.reply("❌ Не вистачає Pv");
+  if (chatId !== ADMIN_ID) {
+    return bot.sendMessage(chatId, "⛔ Нема доступу");
   }
 
-  user.coins -= price;
-  user.tapPower += 1;
+  const amount = Number(match[1]);
 
-  await user.save();
+  await users.updateOne(
+    { chatId },
+    { $inc: { coins: amount } }
+  );
 
-  ctx.reply("✅ Tap покращено!");
+  bot.sendMessage(chatId, `✅ Додано ${amount} монет`);
 });
 
-// BUY INCOME
-bot.command("buy_income", async (ctx) => {
-  const user = await getUser(ctx.from.id);
-  giveOfflineIncome(user);
-
-  const price = 200;
-
-  if (user.coins < price) {
-    return ctx.reply("❌ Не вистачає Pv");
-  }
-
-  user.coins -= price;
-  user.incomePerHour += 5;
-
-  await user.save();
-
-  ctx.reply("✅ Доход збільшено!");
-});
-
-// ================= START =================
-bot.launch();
-console.log("Bot started");
+console.log("🤖 Bot started");
